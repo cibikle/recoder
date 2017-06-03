@@ -22,13 +22,13 @@
 # + SRC [optional; defaults to .], √
 # + DST [optional; defaults to ..\..\Recoded], √
 # + TERM [optional; defaults to .avi], √
-# + INFORMAT [optional; defaults to AVI], √
+# + INPUTFORMAT [optional; defaults to AVI], √
 # + OUTFORMAT [optional; defaults to MP4], √
 # + CLI [optional; defaults to $env:programfiles\HandBrakeCLI]
 # + waaay down the line should allow all the same options and presets and things
 # + that HandBrake does
 # TODO: recheck that file exists before trying transcode?
-# TODO: add "X encodes queued" or whatever
+# TODO: add "X encodes queued" or whatever √
 
 # HandBrakeCLI -i [input] -o [output] --preset=[preset] --two-pass -O #(optimize)
 
@@ -37,11 +37,12 @@ param (
    [string]$src = ".\",
    [string]$dst = "..\Recoded",
    [string]$term = ".avi",
-   [string]$inFormat = "avi",
+   [string]$inputFormat = "avi",
    [string]$outFormat = "mp4",
    [string]$cli = "$env:programfiles\HandBrakeCLI",
    [string]$logs = ".\logs",
-   [string]$data = ".\data"
+   [string]$data = ".\data",
+   [switch]$sleep = $False
 )
 
 if(!(Test-Path "$src")) {
@@ -85,6 +86,11 @@ if(!(Test-Path "$data")) {
    $dataDir = (Resolve-Path "$data").ProviderPath
 }
 
+switch($sleep) {
+   $True { Write-Host "recoder will sleep after job"; break }
+   $False { Write-Host "recoder will NOT sleep after job"; break }
+}
+
 $queFile = "queueFile.que"
 $logFile = "recoderLogFile.txt"
 $presetNew='"Fast 1080p30"'
@@ -101,7 +107,7 @@ $outFNameInd = 3
 
 # param: full filename and path
 # returns length and framerate of the target
-function Get-Video-Info {
+function Get-VideoInfo {
    param (
       [Parameter(Mandatory=$True)]
       [string]$fpath,
@@ -127,7 +133,7 @@ function Get-TimeStamp {
 
 # param: path to the source directory and the search term
 # returns an ArrayList containing the queued jobs as bar separated strings
-function BuildQueue {
+function Build-Queue {
    param (
       [Parameter(Mandatory=$True)]
       [string]$srcDir,
@@ -143,12 +149,13 @@ function BuildQueue {
       $jobParams = ("--input|$inputFName|--output|$dstDir\$outputFName|--preset=$presetNew|--vfr|--optimize")
       [void] $queue.Add($jobParams)
     }
-    
+   Write-Host "$($queue.Count)" -NoNewLine -ForegroundColor "yellow"
+   Write-Host " jobs enqueued"
    return $queue
 }
 
 # param: the ArrayList queue of jobs, the full path and name of the data file
-function ProcessQueue {
+function Process-Queue {
    param (
       [Parameter(Mandatory=$True)]
       [System.Collections.ArrayList]$queue,
@@ -157,9 +164,10 @@ function ProcessQueue {
    )
    
    $i = 1
+   $n = $queue.Count
    foreach ($job in $queue) {
       $params = $job.Split("{|}")
-      Write-Host "$i. $params" # change to i/n ?
+      Write-Host "$i (of $n). $params"
       $inFName = $params[$inFNameInd]
       Try {
          Measure-Command { & "$cli\$hbCLI" $params }
@@ -171,14 +179,11 @@ function ProcessQueue {
       }
       
       $inFName = (Split-Path $params[$inFNameInd] -leaf)
-      $srcInfo = Get-Video-Info $script:srcDir $inFName
+      $srcInfo = Get-VideoInfo $script:srcDir $inFName
       $outFName = (Split-Path $params[$outFNameInd] -leaf)
-      $outInfo = Get-Video-Info $script:dstDir $outFName
+      $outInfo = Get-VideoInfo $script:dstDir $outFName
       $data = @($outFName, $srcInfo, $outInfo)
       
-<#       if($i > 1) {
-         Add-Content $dataFName "`n"
-      } #>
       Add-Content $dataFName "$i. $($data[0])`r`n$($data[1])`r`n$($data[2])"
 
       if($outInfo[$lenInd] -ne $srcInfo[$lenInd]) {
@@ -196,9 +201,17 @@ function ProcessQueue {
    }
 }
 
+function Sleep-Computer {
+   Add-Type -AssemblyName System.Windows.Forms
+   Write-Host "Sleeping at $(Get-TimeStamp)"
+   [System.Windows.Forms.PowerState] $PowerState = [System.Windows.Forms.PowerState]::Suspend
+   [System.Windows.Forms.Application]::SetSuspendState($PowerState, $false, $false) | Out-Null
+   Write-Host "Awoken at $(Get-TimeStamp)"
+}
+
 # "MAIN"
 
-$queue = BuildQueue $srcDir $term
+$queue = Build-Queue $srcDir $term
 $queue > $queFile
 
 Write-Host $queue
@@ -206,4 +219,8 @@ Write-Host ""
 
 $timestamp = Get-TimeStamp
 $dataFName = "data_$($timestamp).txt"
-ProcessQueue $queue "$dataDir\$dataFName"
+Process-Queue $queue "$dataDir\$dataFName"
+
+switch($sleep) {
+   $True {Sleep-Computer}
+}
